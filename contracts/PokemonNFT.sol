@@ -1,30 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract PokemonNFT is 
-    Initializable, 
-    ERC721Upgradeable, 
-    ERC721URIStorageUpgradeable, 
-    OwnableUpgradeable,
-    UUPSUpgradeable 
-{
-    using ECDSA for bytes32;
-    
+contract PokemonNFT is ERC721, ERC721URIStorage, Ownable {
     uint256 private _currentTokenId;
-    mapping(bytes32 => bool) public claimedNFCs;
     
     struct Pokemon {
         string name;
         Rarity rarity;
         string behavior;
         PokemonType pokemonType;
+        bytes32 claimHash;
         bool claimed;
     }
 
@@ -32,24 +21,12 @@ contract PokemonNFT is
     enum PokemonType { FIRE, WATER, GRASS, ELECTRIC, PSYCHIC, NORMAL }
 
     mapping(uint256 => Pokemon) public pokemons;
+    mapping(bytes32 => bool) public usedHashes;
 
-    event PokemonCreated(uint256 indexed tokenId, bytes32 nfcHash);
+    event PokemonCreated(uint256 indexed tokenId, bytes32 claimHash);
     event PokemonClaimed(uint256 indexed tokenId, address indexed claimer);
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
-
-    function initialize(address initialOwner) public initializer {
-        __ERC721_init("PokemonNFT", "PKMN");
-        __ERC721URIStorage_init();
-        __Ownable_init(initialOwner);
-        __UUPSUpgradeable_init();
-        _currentTokenId = 0;
-    }
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+    constructor() ERC721("PokemonNFT", "PKMN") Ownable(msg.sender) {}
 
     function createPokemon(
         string memory name,
@@ -61,40 +38,49 @@ contract PokemonNFT is
         _currentTokenId += 1;
         uint256 newTokenId = _currentTokenId;
 
-        bytes32 nfcHash = keccak256(abi.encodePacked(newTokenId, block.timestamp, msg.sender));
+        bytes32 claimHash = keccak256(abi.encodePacked(newTokenId, block.timestamp, msg.sender));
         
         pokemons[newTokenId] = Pokemon({
             name: name,
             rarity: rarity,
             behavior: behavior,
             pokemonType: pokemonType,
+            claimHash: claimHash,
             claimed: false
         });
 
         _setTokenURI(newTokenId, uri);
         
-        emit PokemonCreated(newTokenId, nfcHash);
-        return (newTokenId, nfcHash);
+        emit PokemonCreated(newTokenId, claimHash);
+        return (newTokenId, claimHash);
     }
 
-    function claimPokemon(uint256 tokenId, bytes32 nfcHash) public {
-        require(!claimedNFCs[nfcHash], "Pokemon already claimed");
-        require(!pokemons[tokenId].claimed, "Pokemon already claimed");
-        require(keccak256(abi.encodePacked(tokenId, block.timestamp - (block.timestamp % 86400), owner())) == nfcHash, "Invalid NFC hash");
-
-        claimedNFCs[nfcHash] = true;
+    function claimPokemon(bytes32 hash) public {
+        require(!usedHashes[hash], "Hash already used");
+        
+        // Find the Pokemon with this hash
+        uint256 tokenId;
+        bool found = false;
+        
+        for(uint256 i = 1; i <= _currentTokenId; i++) {
+            if (pokemons[i].claimHash == hash && !pokemons[i].claimed) {
+                tokenId = i;
+                found = true;
+                break;
+            }
+        }
+        
+        require(found, "Invalid or expired hash");
+        
+        usedHashes[hash] = true;
         pokemons[tokenId].claimed = true;
         _safeMint(msg.sender, tokenId);
 
         emit PokemonClaimed(tokenId, msg.sender);
     }
 
-    function isPokemonClaimed(uint256 tokenId) public view returns (bool) {
-        return pokemons[tokenId].claimed;
-    }
-
-    function isNFCHashClaimed(bytes32 nfcHash) public view returns (bool) {
-        return claimedNFCs[nfcHash];
+    function isHashUsed(bytes32 hash) public view returns (bool) {
+        return usedHashes[hash];
     }
 
     function getPokemon(uint256 tokenId) public view returns (Pokemon memory) {
@@ -112,27 +98,19 @@ contract PokemonNFT is
     }
 
     // Required overrides
-    function _update(address to, uint256 tokenId, address auth)
-        internal override(ERC721Upgradeable) returns (address)
-    {
-        return super._update(to, tokenId, auth);
-    }
-
-    function _increaseBalance(address account, uint128 value)
-        internal override(ERC721Upgradeable)
-    {
-        super._increaseBalance(account, value);
-    }
-
     function tokenURI(uint256 tokenId)
-        public view override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
+        public
+        view
+        override(ERC721, ERC721URIStorage)
         returns (string memory)
     {
         return super.tokenURI(tokenId);
     }
 
     function supportsInterface(bytes4 interfaceId)
-        public view override(ERC721Upgradeable, ERC721URIStorageUpgradeable)
+        public
+        view
+        override(ERC721, ERC721URIStorage)
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
