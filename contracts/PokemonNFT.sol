@@ -13,8 +13,17 @@ contract PokemonNFT is ERC721, ERC721URIStorage, Ownable {
         Rarity rarity;
         string behavior;
         PokemonType pokemonType;
-        bytes32 claimHash;
         bool claimed;
+    }
+
+    struct PokemonData {
+        string name;
+        Rarity rarity;
+        string behavior;
+        PokemonType pokemonType;
+        bool claimed;
+        address owner;
+        string tokenURI;
     }
 
     enum Rarity { COMMON, UNCOMMON, RARE, EPIC, LEGENDARY }
@@ -45,7 +54,6 @@ contract PokemonNFT is ERC721, ERC721URIStorage, Ownable {
             rarity: rarity,
             behavior: behavior,
             pokemonType: pokemonType,
-            claimHash: claimHash,
             claimed: false
         });
 
@@ -62,11 +70,15 @@ contract PokemonNFT is ERC721, ERC721URIStorage, Ownable {
         uint256 tokenId;
         bool found = false;
         
+        // Regenerate hash for each unclaimed Pokemon to find a match
         for(uint256 i = 1; i <= _currentTokenId; i++) {
-            if (pokemons[i].claimHash == hash && !pokemons[i].claimed) {
-                tokenId = i;
-                found = true;
-                break;
+            if (!pokemons[i].claimed) {
+                bytes32 checkHash = keccak256(abi.encodePacked(i, block.timestamp, owner()));
+                if (checkHash == hash) {
+                    tokenId = i;
+                    found = true;
+                    break;
+                }
             }
         }
         
@@ -79,22 +91,41 @@ contract PokemonNFT is ERC721, ERC721URIStorage, Ownable {
         emit PokemonClaimed(tokenId, msg.sender);
     }
 
-    function isHashUsed(bytes32 hash) public view returns (bool) {
-        return usedHashes[hash];
+    function _getTokenURISafe(uint256 tokenId) internal view returns (string memory) {
+        try this.tokenURI(tokenId) returns (string memory uri) {
+            return uri;
+        } catch {
+            return "";
+        }
     }
 
-    function getPokemon(uint256 tokenId) public view returns (Pokemon memory) {
+    function getPokemon(uint256 tokenId) public view returns (PokemonData memory) {
         require(_exists(tokenId), "Pokemon doesn't exist");
-        return pokemons[tokenId];
-    }
+        Pokemon memory pokemon = pokemons[tokenId];
+        
+        address owner = address(0);
+        if (pokemon.claimed) {
+            owner = ownerOf(tokenId);
+        }
 
-    function getPokemonType(uint256 tokenId) public view returns (PokemonType) {
-        require(_exists(tokenId), "Pokemon doesn't exist");
-        return pokemons[tokenId].pokemonType;
+        return PokemonData({
+            name: pokemon.name,
+            rarity: pokemon.rarity,
+            behavior: pokemon.behavior,
+            pokemonType: pokemon.pokemonType,
+            claimed: pokemon.claimed,
+            owner: owner,
+            tokenURI: _getTokenURISafe(tokenId)
+        });
     }
 
     function _exists(uint256 tokenId) internal view returns (bool) {
-        return tokenId > 0 && tokenId <= _currentTokenId && !pokemons[tokenId].claimed;
+        return tokenId > 0 && tokenId <= _currentTokenId;
+    }
+
+    function isPokemonClaimed(uint256 tokenId) public view returns (bool) {
+        require(_exists(tokenId), "Pokemon doesn't exist");
+        return pokemons[tokenId].claimed;
     }
 
     // Required overrides
